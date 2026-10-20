@@ -28,7 +28,7 @@ export default function HomeScreen({ progress, language, live, t, onRoute, onSta
   return (
     <div className="page">
       <header className="page-head home-intro">
-        <span className="eyebrow">Languages has never been easier.</span>
+        <span className="eyebrow">Languages have never been easier.</span>
         <h1 className="page-title">
           Your mother tongue, <span className="hl">No Paiseh.</span>
         </h1>
