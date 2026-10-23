@@ -572,6 +572,18 @@ kbd {
   font-size: 0.8rem;
 }
 
+.home-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.home-meta .link-btn {
+  margin-left: auto;
+}
+
 .dot {
   width: 8px;
   height: 8px;

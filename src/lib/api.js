@@ -1,5 +1,15 @@
-// Calls to the Node server. Any failure (server down, no AWS config, slow reply, bad JSON)
-// throws, and the caller falls back to the scripted demo or saves the feedback for later.
+// Calls to the Node server. Any failure (server down, no AI config, slow reply, bad JSON)
+// throws, and the caller falls back to the scripted demo or saves retryable feedback for later.
+
+export class ApiError extends Error {
+  constructor(message, { status = 0, code = '', retryable = true } = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
 
 async function post(url, payload, timeoutMs) {
   const controller = new AbortController();
@@ -11,14 +21,21 @@ async function post(url, payload, timeoutMs) {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`${url} failed: ${res.status}`);
-    return await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new ApiError(`${url} failed: ${res.status}`, {
+        status: res.status,
+        code: data?.error ?? '',
+        retryable: res.status === 429 || res.status >= 500,
+      });
+    }
+    return data;
   } finally {
     clearTimeout(timer);
   }
 }
 
-// Asks the server (which calls Amazon Bedrock) for the next conversation turn.
+// Asks the server (which calls Gemini) for the next conversation turn.
 export async function fetchTurn(payload, { timeoutMs = 9000 } = {}) {
   const data = await post('/api/chat', payload, timeoutMs);
   if (!data?.ai?.text) throw new Error('chat reply had the wrong shape');

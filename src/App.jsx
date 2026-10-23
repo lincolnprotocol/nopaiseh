@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getLanguage } from './data/languages.js';
 import { getScenario } from './data/scenarios.js';
 import { postFeedback } from './lib/api.js';
@@ -44,6 +44,7 @@ export default function App() {
   const [feedback, setFeedback] = useState(null); // { type, phrase }
   const [runId, setRunId] = useState(0);
   const [live, setLive] = useState(false);
+  const flushingFeedback = useRef(false);
 
   const { settings } = progress;
   const language = getLanguage(settings.lang);
@@ -62,37 +63,56 @@ export default function App() {
 
   useEffect(() => saveProgress(progress), [progress]);
 
-  // Is Bedrock answering, or are we on scripted demo replies?
+  // Is Gemini configured, or are we on scripted demo replies?
   useEffect(() => {
     fetch('/api/health')
       .then((r) => (r.ok ? r.json() : null))
-      .then((h) => setLive(Boolean(h?.bedrock)))
+      .then((h) => setLive(Boolean(h?.conversation?.configured)))
       .catch(() => setLive(false));
   }, []);
 
-  // Retry any feedback that could not be sent last time.
-  useEffect(() => {
-    if (progress.outbox.length === 0) return undefined;
-    let cancelled = false;
-    (async () => {
-      const sent = new Set();
+  const flushFeedback = useCallback(async () => {
+    if (flushingFeedback.current || progress.outbox.length === 0) {
+      return { sent: 0, pending: progress.outbox.length };
+    }
+    flushingFeedback.current = true;
+    const sent = new Set();
+    try {
+      // Process entries independently so one damaged or rate-limited item cannot block the rest.
       for (const entry of progress.outbox) {
         try {
           await postFeedback(entry);
-          sent.add(entry.at);
+          sent.add(entry.id);
         } catch {
-          break;
+          // Keep transient and rejected entries available for a later manual retry.
         }
       }
-      if (sent.size > 0 && !cancelled) {
-        setProgress((p) => ({ ...p, outbox: p.outbox.filter((e) => !sent.has(e.at)) }));
+      if (sent.size > 0) {
+        setProgress((p) => ({ ...p, outbox: p.outbox.filter((entry) => !sent.has(entry.id)) }));
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      return { sent: sent.size, pending: progress.outbox.length - sent.size };
+    } finally {
+      flushingFeedback.current = false;
+    }
+  }, [progress.outbox]);
+
+  // Retry on launch, after a newly queued item, and whenever the browser comes back online.
+  useEffect(() => {
+    flushFeedback();
+    const retry = () => flushFeedback();
+    window.addEventListener('online', retry);
+    return () => window.removeEventListener('online', retry);
+  }, [flushFeedback]);
+
+  const queueFeedbackEntry = useCallback(
+    (entry) => {
+      const next = queueFeedback(progress, entry);
+      const saved = saveProgress(next);
+      setProgress(next);
+      return saved;
+    },
+    [progress],
+  );
 
   const setSettings = useCallback(
     (patch) => setProgress((p) => ({ ...p, settings: { ...p.settings, ...patch } })),
@@ -236,7 +256,7 @@ export default function App() {
         initialPhrase={feedback.phrase}
         appLanguage={language.id}
         onBack={goHome}
-        onQueue={(entry) => setProgress((p) => queueFeedback(p, entry))}
+        onQueue={queueFeedbackEntry}
       />
     );
   } else if (route === 'learn') {
@@ -282,6 +302,8 @@ export default function App() {
         onImport={(text) => setProgress(importProgress(text))}
         onReset={() => setProgress(resetProgress())}
         onRoute={navigate}
+        pendingFeedback={progress.outbox.length}
+        onRetryFeedback={flushFeedback}
       />
     );
   } else {

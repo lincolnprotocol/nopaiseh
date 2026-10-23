@@ -1,6 +1,6 @@
 // Mandarin content. Same shape as ms.js and ta.js.
 // - `script` is the offline demo AND the fallback if the AI server is unreachable.
-// - `persona` and `setting` feed the Bedrock prompt.
+// - `persona` and `setting` feed the AI prompt.
 // - `tip` is a short language / culture note shown after the session.
 //
 // NOTE: not yet checked by a native speaker. Have someone proof-read every line.

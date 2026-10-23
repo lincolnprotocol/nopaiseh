@@ -51,6 +51,7 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
   const [listening, setListening] = useState(false);
   const [micNote, setMicNote] = useState('');
   const [voiceOk, setVoiceOk] = useState(() => voiceAvailable(language.id, voiceName));
+  const [usingFallback, setUsingFallback] = useState(false);
 
   const nextId = useRef(1);
   const sending = useRef(false);
@@ -118,8 +119,10 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
         final,
         slow: settings.slow,
       });
+      setUsingFallback(false);
     } catch {
       data = fallbackTurn(language, scenario, turn, value, Boolean(chip));
+      setUsingFallback(true);
     }
 
     if (settings.naturalPacing) {
@@ -321,6 +324,12 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
           <span style={{ width: `${progressPct}%` }} />
         </div>
       </header>
+
+      {usingFallback && (
+        <p className="voice-note" role="status">
+          Live AI is unavailable right now, so this conversation is continuing with the authored demo.
+        </p>
+      )}
 
       {voiceOk === false && (
         <p className="voice-note" role="status">

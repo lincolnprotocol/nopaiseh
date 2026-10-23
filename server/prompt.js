@@ -1,4 +1,4 @@
-// Prompt building and reply validation for the Bedrock conversation partner.
+// Prompt building and reply validation for the AI conversation partner.
 
 const RULES = {
   zh: {

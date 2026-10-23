@@ -187,10 +187,15 @@ export default function HomeScreen({ progress, language, live, t, onRoute, onSta
             </button>
           </section>
 
-          <p className="foot">
-            <span className={`dot ${live ? 'live' : ''}`} aria-hidden="true" />
-            {live ? 'Live conversation' : 'Scripted demo, ready offline'}
-          </p>
+          <div className="home-meta">
+            <p className="foot">
+              <span className={`dot ${live ? 'live' : ''}`} aria-hidden="true" />
+              {live ? 'Gemini configured' : 'Scripted demo, ready offline'}
+            </p>
+            <button className="link-btn tiny" onClick={() => onRoute('feedback')}>
+              Share feedback
+            </button>
+          </div>
         </div>
       </div>
     </div>

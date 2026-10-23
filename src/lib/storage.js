@@ -123,6 +123,18 @@ function migrate(old, key) {
   };
 }
 
+function makeFeedbackEntry(entry) {
+  const id =
+    typeof entry?.id === 'string' && entry.id
+      ? entry.id
+      : globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return {
+    ...entry,
+    id,
+    submittedAt: entry?.submittedAt ?? entry?.at ?? new Date().toISOString(),
+  };
+}
+
 function normalise(saved) {
   const langs = {};
   for (const [id, state] of Object.entries(saved.langs ?? {})) {
@@ -148,15 +160,19 @@ function normalise(saved) {
     day: saved.day ?? null,
     freezes: Number.isFinite(saved.freezes) ? saved.freezes : DEFAULTS.freezes,
     langs,
-    outbox: Array.isArray(saved.outbox) ? saved.outbox : [],
+    outbox: Array.isArray(saved.outbox)
+      ? saved.outbox.filter((entry) => entry && typeof entry === 'object').map(makeFeedbackEntry)
+      : [],
   };
 }
 
 export function saveProgress(progress) {
   try {
     localStorage.setItem(KEY, JSON.stringify(progress));
+    return true;
   } catch {
     // private mode or quota: the session still works, it just will not persist
+    return false;
   }
 }
 
@@ -441,7 +457,7 @@ export function earnedAchievements(progress) {
 /* ---------------------------------------------------------------- feedback */
 
 export function queueFeedback(progress, entry) {
-  return { ...progress, outbox: [...progress.outbox, entry].slice(-20) };
+  return { ...progress, outbox: [...progress.outbox, makeFeedbackEntry(entry)].slice(-20) };
 }
 
 /* ----------------------------------------------------------- export/import */
