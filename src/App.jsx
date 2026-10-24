@@ -61,7 +61,9 @@ export default function App() {
     configureSpeech({ style: settings.voiceStyle, voiceOverrides: settings.voiceOverrides });
   }, [settings.voiceStyle, settings.voiceOverrides]);
 
-  useEffect(() => saveProgress(progress), [progress]);
+  useEffect(() => {
+    saveProgress(progress);
+  }, [progress]);
 
   // Is Gemini configured, or are we on scripted demo replies?
   useEffect(() => {
