@@ -11,6 +11,8 @@ export async function generateGeminiTurn({
   systemPrompt,
   userPrompt,
   timeoutMs = 8500,
+  maxOutputTokens = 1000,
+  temperature = 0.6,
   fetchImpl = fetch,
 }) {
   if (!apiKey) throw new Error('Gemini is not configured');
@@ -29,8 +31,8 @@ export async function generateGeminiTurn({
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
         generationConfig: {
-          temperature: 0.6,
-          maxOutputTokens: 1000,
+          temperature,
+          maxOutputTokens,
           responseMimeType: 'application/json',
         },
       }),

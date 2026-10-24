@@ -93,8 +93,9 @@ voice, but the picker makes the best available option visible instead of silentl
 
 ## What is in the app
 
-- **3 languages x 4 real-life scenarios** — hawker/prata stall, dinner with grandma, chatting with a friend, and
-  first day at the office.
+- **3 languages x 4 ready-made scenarios**, plus **Make your own moment** — describe a situation such as
+  asking Dad for allowance and Gemini creates a private, language-specific warm-up and conversation. Up to eight
+  generated moments per language are kept in this browser and included in backups.
 - **Real talk** — a dictionary pairing the textbook form with what people actually say (你好 vs 吃饱了没, *Apa
   khabar* vs *Dah makan?*, வணக்கம் vs சாப்பிட்டியா?). Every entry says **who it is safe to say it to**, because
   the fastest way back to feeling paiseh is using friend-slang on your grandmother's sister.
@@ -128,10 +129,16 @@ voice, but the picker makes the best available option visible instead of silentl
 4. Optionally change `GEMINI_MODEL` (the default is `gemini-2.5-flash`), then restart `npm run dev`.
 
 Gemini receives the selected scenario, character, learning language and recent transcript. It responds to
-whatever the learner types or says while staying in character, returns gentle corrections, and creates two
-natural next-reply suggestions. The conversation remains deliberately bounded to the authored lesson length.
-If Gemini is unconfigured, times out, or returns an unusable response, the app clearly switches to its scripted
-fallback instead of breaking the practice session.
+whatever the learner types or says while staying in character, returns gentle corrections, and follows the
+phrases taught in the warm-up. From Home, **Make your own moment** also lets a learner describe a situation in
+plain English; Gemini builds a validated five-step lesson and conversation for the selected language. Generated
+moments are signed by the server, saved only in that browser's progress, and retain a complete scripted fallback.
+The conversation remains deliberately bounded to the lesson length. If Gemini is unconfigured, times out, or
+returns an unusable response, the app clearly switches to its scripted fallback instead of breaking the session.
+
+For deployed apps, set a long, stable `MOMENT_SIGNING_SECRET` so saved custom moments remain valid when the Gemini
+key is rotated or the app runs on multiple instances. Local development falls back to using `GEMINI_API_KEY` for
+signing.
 
 Amazon Polly remains optional for Mandarin dialogue, with role-specific speech rates and punctuation-aware
 SSML pauses. Configure normal AWS credentials to enable it. Polly has no Malay or Tamil voice in this app, so
@@ -153,6 +160,7 @@ instead of silently doing nothing. If speech synthesis fails, the app falls back
 | `src/components/layout/` | App shell, sidebar and bottom bar, layout picker |
 | `src/lib/` | AI calls, offline fallback, voice selection and persona delivery, progress and spaced repetition, pronunciation scoring, word tiles, writing checks, lesson and quiz helpers, layout resolution, UI strings |
 | `server/gemini.js` | Server-only Gemini REST client with timeout and JSON response mode |
+| `server/moment.js` | Safe custom-moment prompting plus signed scenario references |
 | `server/tts.js` | Safe SSML builder for natural Mandarin role profiles and punctuation-aware pauses |
 | `server/` | Express API: Gemini chat, Polly voice, feedback inbox |
 

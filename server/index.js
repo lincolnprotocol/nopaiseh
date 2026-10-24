@@ -14,6 +14,15 @@ import { buildNaturalSsml, normaliseVoiceRequest } from './tts.js';
 import { getScenario } from '../src/data/scenarios.js';
 import { buildSystemPrompt, buildUserPrompt, extractJson, normalizeTurn } from './prompt.js';
 import { DEFAULT_GEMINI_MODEL, generateGeminiTurn } from './gemini.js';
+import {
+  buildMomentSystemPrompt,
+  buildMomentUserPrompt,
+  buildMomentRepairPrompt,
+  normalizeGeneratedMoment,
+  normalizeMomentRequest,
+  signScenarioRef,
+  verifyScenarioRef,
+} from './moment.js';
 import { appendFeedback, readFeedback, summarize, validateFeedback } from './feedback.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -21,6 +30,7 @@ const PORT = Number(process.env.PORT) || 8787;
 const REGION = process.env.AWS_REGION || 'ap-southeast-1';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const MOMENT_SIGNING_SECRET = process.env.MOMENT_SIGNING_SECRET || GEMINI_API_KEY;
 const FEEDBACK_FILE = process.env.FEEDBACK_FILE || path.join(here, 'feedback.jsonl');
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
@@ -30,7 +40,7 @@ const pollyClient = () =>
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '16kb' }));
+app.use(express.json({ limit: '32kb' }));
 
 // Small per-IP rate limits so a public demo link cannot burn through AI credits or fill the disk.
 function makeLimiter(maxPerMinute) {
@@ -49,6 +59,7 @@ function makeLimiter(maxPerMinute) {
   };
 }
 const apiLimit = makeLimiter(60);
+const momentLimit = makeLimiter(6);
 const feedbackLimit = makeLimiter(6);
 
 app.get('/api/health', (_req, res) => {
@@ -62,15 +73,86 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+app.post('/api/moments', momentLimit, async (req, res) => {
+  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'not_configured' });
+  const language = languages.find((item) => item.id === req.body?.languageId);
+  const normalizedRequest = normalizeMomentRequest(req.body?.request);
+  if (!language || normalizedRequest.error) {
+    return res.status(400).json({ error: normalizedRequest.error ?? 'bad_language' });
+  }
+
+  try {
+    const generationOptions = {
+      apiKey: GEMINI_API_KEY,
+      model: GEMINI_MODEL,
+      systemPrompt: buildMomentSystemPrompt(language),
+      timeoutMs: 25_000,
+      maxOutputTokens: 6000,
+      temperature: 0.7,
+    };
+    let text = await generateGeminiTurn({
+      ...generationOptions,
+      userPrompt: buildMomentUserPrompt(normalizedRequest.request),
+    });
+    let scenario;
+    try {
+      scenario = normalizeGeneratedMoment(language, extractJson(text));
+    } catch (validationError) {
+      text = await generateGeminiTurn({
+        ...generationOptions,
+        userPrompt: buildMomentRepairPrompt(
+          normalizedRequest.request,
+          text,
+          validationError?.message,
+        ),
+      });
+      scenario = normalizeGeneratedMoment(language, extractJson(text));
+    }
+    const scenarioRef = signScenarioRef(language.id, scenario, MOMENT_SIGNING_SECRET);
+    res.json({ scenario, scenarioRef, createdAt: Date.now(), source: 'gemini' });
+  } catch (err) {
+    console.error('moment generation failed:', err?.name, err?.message);
+    res.status(502).json({ error: 'generation_failed' });
+  }
+});
+
 app.post('/api/chat', apiLimit, async (req, res) => {
   if (!GEMINI_API_KEY) return res.status(503).json({ error: 'not_configured' });
 
-  const { languageId = 'zh', scenarioId, history, final = false, slow = false } = req.body ?? {};
-  const language = languages.find((l) => l.id === languageId);
-  const scenario = language && getScenario(language.id, scenarioId);
-  if (!scenario || !Array.isArray(history) || history.length === 0 || history.length > 30) {
+  const { languageId = 'zh', scenarioId, scenarioRef = '', history, slow = false } = req.body ?? {};
+  const language = languages.find((item) => item.id === languageId);
+  let scenario = language && getScenario(language.id, scenarioId);
+  if (!scenario && language && scenarioRef) {
+    try {
+      scenario = verifyScenarioRef(scenarioRef, language, MOMENT_SIGNING_SECRET);
+    } catch {
+      return res.status(400).json({ error: 'invalid_moment' });
+    }
+  }
+
+  const validHistory =
+    Array.isArray(history) &&
+    history.length > 0 &&
+    history.length <= 30 &&
+    history.every(
+      (message) =>
+        message &&
+        (message.role === 'ai' || message.role === 'user') &&
+        typeof message.text === 'string' &&
+        message.text.trim() &&
+        message.text.length <= 300,
+    ) &&
+    history.reduce((total, message) => total + message.text.length, 0) <= 5000 &&
+    history.at(-1)?.role === 'user';
+  if (!scenario || scenario.id !== scenarioId || !validHistory) {
     return res.status(400).json({ error: 'bad_request' });
   }
+
+  const userTurns = history.filter((message) => message.role === 'user').length;
+  const totalReplies = scenario.script.length - 1;
+  if (userTurns < 1 || userTurns > totalReplies) return res.status(400).json({ error: 'bad_turn' });
+  const final = userTurns >= totalReplies;
+  const plannedStep = scenario.script[userTurns];
 
   try {
     const text = await generateGeminiTurn({
@@ -78,11 +160,14 @@ app.post('/api/chat', apiLimit, async (req, res) => {
       model: GEMINI_MODEL,
       systemPrompt: buildSystemPrompt(language, scenario, {
         slow: Boolean(slow),
-        final: Boolean(final),
+        final,
       }),
-      userPrompt: buildUserPrompt(history, { final: Boolean(final) }),
+      userPrompt: buildUserPrompt(history, { final, scenario, plannedStep }),
     });
-    res.json({ ...normalizeTurn(extractJson(text), { final: Boolean(final) }), source: 'gemini' });
+    const turn = normalizeTurn(extractJson(text), { final });
+    turn.suggestions = final ? [] : plannedStep.suggestions;
+    if (turn.learned.length === 0) turn.learned = plannedStep.learned;
+    res.json({ ...turn, final, source: 'gemini' });
   } catch (err) {
     console.error('chat failed:', err?.name, err?.message);
     res.status(502).json({ error: 'model_failed' });

@@ -10,7 +10,13 @@
 //   - export / import, because "no accounts" should not mean "lose everything with your phone"
 
 import { ACHIEVEMENTS } from '../data/achievements.js';
+import { getLanguage } from '../data/languages.js';
 import { MISSION_POOL, missionsForDay } from '../data/missions.js';
+import {
+  MAX_CUSTOM_MOMENTS,
+  normalizeCustomMomentCollection,
+  normalizeCustomMomentRecord,
+} from './customMoment.js';
 
 const KEY = 'bilingos:v3';
 const OLD_KEYS = ['bilingos:v2', 'bilingos:v1'];
@@ -56,6 +62,7 @@ const blankLang = () => ({
   sessions: 0,
   phrases: {}, // text -> { text, roman, english, savedAt, box, due, reps, lapses }
   lessons: {}, // scenarioId -> true
+  customMoments: {}, // scenarioId -> { scenario, scenarioRef, createdAt }
   counters: { build: 0, write: 0, say: 0, review: 0 },
 });
 
@@ -148,6 +155,7 @@ function normalise(saved) {
           { box: 0, due: 0, reps: 0, lapses: 0, savedAt: Date.now(), ...p, text },
         ]),
       ),
+      customMoments: normalizeCustomMomentCollection(getLanguage(id), state?.customMoments),
     };
   }
   return {
@@ -338,6 +346,28 @@ export function completeLesson(progress, lang, scenarioId, phrases, xpGained) {
 
 export const lessonDone = (progress, lang, scenarioId) =>
   Boolean(langState(progress, lang).lessons?.[scenarioId]);
+
+export function customMomentsFor(progress, lang) {
+  return Object.values(langState(progress, lang).customMoments ?? {}).sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
+}
+
+export function saveCustomMoment(progress, lang, record) {
+  const normalized = normalizeCustomMomentRecord(getLanguage(lang), record);
+  const cur = langState(progress, lang);
+  const records = [
+    normalized,
+    ...Object.values(cur.customMoments ?? {}).filter(
+      (saved) => saved.scenario?.id !== normalized.scenario.id,
+    ),
+  ]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, MAX_CUSTOM_MOMENTS);
+  return withLang(progress, lang, {
+    customMoments: Object.fromEntries(records.map((saved) => [saved.scenario.id, saved])),
+  });
+}
 
 export function recordReview(progress, lang, { xpGained, reviewed = 0 }) {
   const next = reviewed > 0 ? bumpMission(progress, 'review', reviewed) : progress;

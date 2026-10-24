@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getLanguage } from './data/languages.js';
 import { getScenario } from './data/scenarios.js';
-import { postFeedback } from './lib/api.js';
+import { generateMoment, postFeedback } from './lib/api.js';
 import { translator, uiHtmlLang } from './lib/i18n.js';
 import { configureSpeech, stopSpeaking, unlockAudio } from './lib/speech.js';
 import {
   allPhrases,
   completeLesson,
+  customMomentsFor,
   duePhrases,
   exportProgress,
   gradePhrase,
@@ -19,6 +20,7 @@ import {
   recordReview,
   recordSession,
   resetProgress,
+  saveCustomMoment,
   savePhrase,
   saveProgress,
 } from './lib/storage.js';
@@ -43,11 +45,14 @@ export default function App() {
   const [flow, setFlow] = useState(null); // { name: 'lesson' | 'chat' | 'summary', ... }
   const [feedback, setFeedback] = useState(null); // { type, phrase }
   const [runId, setRunId] = useState(0);
-  const [live, setLive] = useState(false);
+  const [live, setLive] = useState(null);
   const flushingFeedback = useRef(false);
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
 
   const { settings } = progress;
   const language = getLanguage(settings.lang);
+  const customMomentRecords = customMomentsFor(progress, language.id);
   const t = useMemo(() => translator(settings.uiLang), [settings.uiLang]);
   const { layout } = useLayout(settings.layout);
 
@@ -180,6 +185,26 @@ export default function App() {
     }
   };
 
+  const createMoment = async (request) => {
+    unlockAudio();
+    const generated = await generateMoment({ languageId: language.id, request });
+    const record = {
+      scenario: generated.scenario,
+      scenarioRef: generated.scenarioRef,
+      createdAt: generated.createdAt ?? Date.now(),
+    };
+    const next = saveCustomMoment(progressRef.current, language.id, record);
+    if (!saveProgress(next)) {
+      const error = new Error('Custom moment could not be saved');
+      error.code = 'storage_failed';
+      throw error;
+    }
+    progressRef.current = next;
+    setProgress(next);
+    setFlow({ name: 'lesson', scenarioId: generated.scenario.id });
+    return generated.scenario;
+  };
+
   const finishLesson = ({ phrases, skipped }) => {
     setProgress((p) => completeLesson(p, language.id, flow.scenarioId, phrases, skipped ? 5 : 15));
     startChat(flow.scenarioId);
@@ -208,7 +233,12 @@ export default function App() {
   /* ----------------------------------------------------------------- render */
 
   const due = duePhrases(progress, language.id).length;
-  const scenario = flow?.scenarioId ? getScenario(language.id, flow.scenarioId) : null;
+  const customMomentRecord = flow?.scenarioId
+    ? customMomentRecords.find((record) => record.scenario.id === flow.scenarioId)
+    : null;
+  const scenario = flow?.scenarioId
+    ? getScenario(language.id, flow.scenarioId) ?? customMomentRecord?.scenario
+    : null;
   const immersive = Boolean(flow && scenario);
 
   let content;
@@ -230,6 +260,7 @@ export default function App() {
         key={runId}
         language={language}
         scenario={scenario}
+        scenarioRef={customMomentRecord?.scenarioRef ?? ''}
         settings={settings}
         layout={layout}
         onExit={goHome}
@@ -262,7 +293,15 @@ export default function App() {
       />
     );
   } else if (route === 'learn') {
-    content = <LearnScreen progress={progress} language={language} t={t} onStart={start} />;
+    content = (
+      <LearnScreen
+        progress={progress}
+        language={language}
+        customMoments={customMomentRecords}
+        t={t}
+        onStart={start}
+      />
+    );
   } else if (route === 'review') {
     content = (
       <ReviewScreen
@@ -314,9 +353,11 @@ export default function App() {
         progress={progress}
         language={language}
         live={live}
+        customMoments={customMomentRecords}
         t={t}
         onRoute={navigate}
         onStart={start}
+        onCreateMoment={createMoment}
         onLanguage={changeLanguage}
       />
     );
