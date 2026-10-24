@@ -65,7 +65,12 @@ export default function HomeScreen({
         slow_down: 'A few moments were just created. Wait a minute, then try again.',
         request_too_short: 'Describe the moment in a little more detail.',
         request_too_long: 'Keep your request under 240 characters.',
-        generation_failed: "Gemini couldn't shape that into a lesson this time. Try a simpler description.",
+        generation_invalid: "Gemini made a response that wasn't lesson-ready. Try once more or reword the situation.",
+        generation_failed: 'The Gemini connection failed before the moment was ready. Please try again.',
+        provider_busy: 'Gemini is busy right now—your request is fine. Wait a few seconds, then press the button again.',
+        provider_limit: 'The Gemini usage limit has been reached. Wait for the limit to reset, then try again.',
+        provider_auth: 'The Gemini connection could not authenticate. The app owner needs to replace the API key.',
+        model_unavailable: 'The selected Gemini model is unavailable. The app owner needs to update its model setting.',
         storage_failed: "Your browser couldn't save the new moment. Free some browser storage and try again.",
       };
       setMomentError(messages[error?.code] ?? 'Could not create that moment. Check your connection and try again.');

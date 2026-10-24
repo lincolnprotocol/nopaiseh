@@ -13,7 +13,11 @@ import { languages } from '../src/data/languages.js';
 import { buildNaturalSsml, normaliseVoiceRequest } from './tts.js';
 import { getScenario } from '../src/data/scenarios.js';
 import { buildSystemPrompt, buildUserPrompt, extractJson, normalizeTurn } from './prompt.js';
-import { DEFAULT_GEMINI_MODEL, generateGeminiTurn } from './gemini.js';
+import {
+  DEFAULT_GEMINI_FALLBACK_MODEL,
+  DEFAULT_GEMINI_MODEL,
+  generateGeminiTurn,
+} from './gemini.js';
 import {
   buildMomentSystemPrompt,
   buildMomentUserPrompt,
@@ -30,6 +34,10 @@ const PORT = Number(process.env.PORT) || 8787;
 const REGION = process.env.AWS_REGION || 'ap-southeast-1';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const GEMINI_FALLBACK_MODELS = [
+  DEFAULT_GEMINI_MODEL,
+  process.env.GEMINI_FALLBACK_MODEL || DEFAULT_GEMINI_FALLBACK_MODEL,
+].filter((model, index, models) => model !== GEMINI_MODEL && models.indexOf(model) === index);
 const MOMENT_SIGNING_SECRET = process.env.MOMENT_SIGNING_SECRET || GEMINI_API_KEY;
 const FEEDBACK_FILE = process.env.FEEDBACK_FILE || path.join(here, 'feedback.jsonl');
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
@@ -68,6 +76,7 @@ app.get('/api/health', (_req, res) => {
       provider: 'gemini',
       configured: Boolean(GEMINI_API_KEY),
       model: GEMINI_API_KEY ? GEMINI_MODEL : null,
+      fallbackModels: GEMINI_API_KEY ? GEMINI_FALLBACK_MODELS : [],
     },
     languages: languages.map((l) => l.id),
   });
@@ -85,10 +94,12 @@ app.post('/api/moments', momentLimit, async (req, res) => {
     const generationOptions = {
       apiKey: GEMINI_API_KEY,
       model: GEMINI_MODEL,
+      fallbackModels: GEMINI_FALLBACK_MODELS,
       systemPrompt: buildMomentSystemPrompt(language),
       timeoutMs: 25_000,
       maxOutputTokens: 6000,
       temperature: 0.7,
+      retries: 2,
     };
     let text = await generateGeminiTurn({
       ...generationOptions,
@@ -106,13 +117,35 @@ app.post('/api/moments', momentLimit, async (req, res) => {
           validationError?.message,
         ),
       });
-      scenario = normalizeGeneratedMoment(language, extractJson(text));
+      try {
+        scenario = normalizeGeneratedMoment(language, extractJson(text));
+      } catch (finalValidationError) {
+        finalValidationError.code = 'invalid_output';
+        throw finalValidationError;
+      }
     }
     const scenarioRef = signScenarioRef(language.id, scenario, MOMENT_SIGNING_SECRET);
     res.json({ scenario, scenarioRef, createdAt: Date.now(), source: 'gemini' });
   } catch (err) {
-    console.error('moment generation failed:', err?.name, err?.message);
-    res.status(502).json({ error: 'generation_failed' });
+    console.error(
+      'moment generation failed:',
+      err?.name,
+      err?.message,
+      err?.model ? `model=${err.model}` : '',
+      err?.detail ?? '',
+    );
+    if (err?.code === 'invalid_output') {
+      return res.status(502).json({ error: 'generation_invalid' });
+    }
+    if (err?.status === 429) return res.status(429).json({ error: 'provider_limit' });
+    if (err?.status === 401 || err?.status === 403) {
+      return res.status(502).json({ error: 'provider_auth' });
+    }
+    if (err?.status === 404) return res.status(502).json({ error: 'model_unavailable' });
+    if (err?.status >= 500 || err?.name === 'AbortError' || !err?.status) {
+      return res.status(503).json({ error: 'provider_busy' });
+    }
+    return res.status(502).json({ error: 'generation_failed' });
   }
 });
 
@@ -158,11 +191,13 @@ app.post('/api/chat', apiLimit, async (req, res) => {
     const text = await generateGeminiTurn({
       apiKey: GEMINI_API_KEY,
       model: GEMINI_MODEL,
+      fallbackModels: GEMINI_FALLBACK_MODELS,
       systemPrompt: buildSystemPrompt(language, scenario, {
         slow: Boolean(slow),
         final,
       }),
       userPrompt: buildUserPrompt(history, { final, scenario, plannedStep }),
+      timeoutMs: 12_000,
     });
     const turn = normalizeTurn(extractJson(text), { final });
     turn.suggestions = final ? [] : plannedStep.suggestions;
@@ -259,7 +294,7 @@ app.listen(PORT, () => {
   console.log(`BiLingos API on http://localhost:${PORT}`);
   console.log(
     GEMINI_API_KEY
-      ? `Gemini: on (${GEMINI_MODEL})`
+      ? `Gemini: on (primary ${GEMINI_MODEL}${GEMINI_FALLBACK_MODELS.length ? `; fallback ${GEMINI_FALLBACK_MODELS.join(', ')}` : ''})`
       : 'Gemini: off. Set GEMINI_API_KEY in .env. The app will use scripted demo replies.',
   );
   console.log(`Feedback file: ${FEEDBACK_FILE}${ADMIN_KEY ? ' (admin view on)' : ''}`);

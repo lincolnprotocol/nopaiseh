@@ -36,7 +36,7 @@ async function post(url, payload, timeoutMs) {
 }
 
 // Asks the server (which calls Gemini) for the next conversation turn.
-export async function fetchTurn(payload, { timeoutMs = 9000 } = {}) {
+export async function fetchTurn(payload, { timeoutMs = 14_000 } = {}) {
   const data = await post('/api/chat', payload, timeoutMs);
   if (!data?.ai?.text) throw new Error('chat reply had the wrong shape');
   return data;
