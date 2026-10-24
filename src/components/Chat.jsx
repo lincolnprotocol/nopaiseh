@@ -18,12 +18,21 @@ import Phrase from './Phrase.jsx';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export default function Chat({ language, scenario, settings, layout, onExit, onFinish, onDrill }) {
+export default function Chat({
+  language,
+  scenario,
+  scenarioRef = '',
+  settings,
+  layout,
+  onExit,
+  onFinish,
+  onDrill,
+}) {
   const { persona, script } = scenario;
   const totalReplies = script.length - 1; // the last scripted step is the closing line
   const opener = script[0];
   const voiceName = settings.voiceOverrides?.[language.id] ?? '';
-  const personaProfile = profileForScenario(scenario.id);
+  const personaProfile = scenario.voiceProfile ?? profileForScenario(scenario.id);
   const personaSpeakOpts = {
     lang: language.id,
     slow: settings.slow,
@@ -51,6 +60,7 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
   const [listening, setListening] = useState(false);
   const [micNote, setMicNote] = useState('');
   const [voiceOk, setVoiceOk] = useState(() => voiceAvailable(language.id, voiceName));
+  const [fallbackMessage, setFallbackMessage] = useState('');
 
   const nextId = useRef(1);
   const sending = useRef(false);
@@ -114,12 +124,19 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
       data = await fetchTurn({
         languageId: language.id,
         scenarioId: scenario.id,
+        scenarioRef,
         history,
         final,
         slow: settings.slow,
       });
-    } catch {
+      setFallbackMessage('');
+    } catch (error) {
       data = fallbackTurn(language, scenario, turn, value, Boolean(chip));
+      setFallbackMessage(
+        error?.code === 'invalid_moment'
+          ? 'This saved moment can no longer connect to live AI, so its prepared conversation is continuing. Create it again for fresh AI replies.'
+          : 'Live AI is unavailable right now, so this conversation is continuing with the prepared version.',
+      );
     }
 
     if (settings.naturalPacing) {
@@ -129,6 +146,7 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
     }
     if (!mounted.current) return;
 
+    const completed = typeof data.final === 'boolean' ? data.final : final;
     const aiId = nextId.current++;
     setMessages((m) => [
       ...m.map((x) => (x.id === userMsg.id ? { ...x, nudge: data.nudge } : x)),
@@ -141,7 +159,7 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
     });
     setReplies(turn);
     if ((chip && !assisted) || (!chip && looksLikeTarget(language.id, value))) setTargetReplies((n) => n + 1);
-    if (final) setDone(true);
+    if (completed) setDone(true);
     setBusy(false);
     sending.current = false;
     autoSpeak(data.ai.text);
@@ -321,6 +339,12 @@ export default function Chat({ language, scenario, settings, layout, onExit, onF
           <span style={{ width: `${progressPct}%` }} />
         </div>
       </header>
+
+      {fallbackMessage && (
+        <p className="voice-note" role="status">
+          {fallbackMessage}
+        </p>
+      )}
 
       {voiceOk === false && (
         <p className="voice-note" role="status">

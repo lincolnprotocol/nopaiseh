@@ -3,9 +3,12 @@ import { lessonPhrases } from '../../lib/lesson.js';
 import { langState } from '../../lib/storage.js';
 import { Check, Forward } from '../Icons.jsx';
 
-export default function LearnScreen({ progress, language, t, onStart }) {
+export default function LearnScreen({ progress, language, customMoments = [], t, onStart }) {
   const state = langState(progress, language.id);
-  const scenarios = scenariosFor(language.id);
+  const scenarios = [
+    ...customMoments.map((record) => record.scenario),
+    ...scenariosFor(language.id),
+  ];
   const doneCount = scenarios.filter((s) => state.lessons?.[s.id]).length;
 
   return (
@@ -34,6 +37,7 @@ export default function LearnScreen({ progress, language, t, onStart }) {
                   <b>{s.title}</b>
                   <small>{s.blurb}</small>
                   <span className="scenario-tags">
+                    {s.custom && <span className="pill-tag ai-made">✦ Made for you</span>}
                     <span className="pill-tag">
                       with {s.persona.name} · {s.persona.role}
                     </span>

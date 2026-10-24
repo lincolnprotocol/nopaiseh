@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { languages } from '../../data/languages.js';
 import { scenariosFor } from '../../data/scenarios.js';
 import {
@@ -7,16 +8,37 @@ import {
 } from '../../lib/storage.js';
 import { Book, Forward, Sparkles } from '../Icons.jsx';
 
+const MOMENT_EXAMPLES = [
+  'Ask my dad for allowance',
+  'Explain why I came home late',
+  'Invite my cousin out for lunch',
+];
+
 // Home is organised around places the learner can use their mother tongue, not around a score.
 // Points and milestones still exist for learners who enjoy them, but they live in Progress rather
 // than defining the first screen everybody sees.
-export default function HomeScreen({ progress, language, live, t, onRoute, onStart, onLanguage }) {
+export default function HomeScreen({
+  progress,
+  language,
+  live,
+  customMoments = [],
+  t,
+  onRoute,
+  onStart,
+  onCreateMoment,
+  onLanguage,
+}) {
+  const [momentRequest, setMomentRequest] = useState('');
+  const [makingMoment, setMakingMoment] = useState(false);
+  const [momentError, setMomentError] = useState('');
   const state = langState(progress, language.id);
   const phrases = allPhrases(progress, language.id);
   const due = duePhrases(progress, language.id);
   const scenarios = scenariosFor(language.id);
   const nextScenario = scenarios.find((s) => !state.lessons?.[s.id]) ?? scenarios[0];
-  const warmed = scenarios.filter((s) => state.lessons?.[s.id]).length;
+  const warmed = [...scenarios, ...customMoments.map((record) => record.scenario)].filter(
+    (scenario) => state.lessons?.[scenario.id],
+  ).length;
   const outsidePhrase =
     phrases[0] ??
     {
@@ -24,6 +46,33 @@ export default function HomeScreen({ progress, language, live, t, onRoute, onSta
       ms: { text: 'Dah makan?', english: 'Have you eaten?' },
       ta: { text: 'சாப்பிட்டியா?', english: 'Have you eaten?' },
     }[language.id];
+
+  async function makeMoment(event) {
+    event.preventDefault();
+    const request = momentRequest.trim();
+    if (request.length < 6) {
+      setMomentError('Describe the moment in a little more detail.');
+      return;
+    }
+    setMakingMoment(true);
+    setMomentError('');
+    try {
+      await onCreateMoment(request);
+      setMomentRequest('');
+    } catch (error) {
+      const messages = {
+        not_configured: 'Custom moments are unavailable right now. You can still use every ready-made or saved moment.',
+        slow_down: 'A few moments were just created. Wait a minute, then try again.',
+        request_too_short: 'Describe the moment in a little more detail.',
+        request_too_long: 'Keep your request under 240 characters.',
+        generation_failed: "Gemini couldn't shape that into a lesson this time. Try a simpler description.",
+        storage_failed: "Your browser couldn't save the new moment. Free some browser storage and try again.",
+      };
+      setMomentError(messages[error?.code] ?? 'Could not create that moment. Check your connection and try again.');
+    } finally {
+      setMakingMoment(false);
+    }
+  }
 
   return (
     <div className="page">
@@ -64,6 +113,90 @@ export default function HomeScreen({ progress, language, live, t, onRoute, onSta
             </span>
             <Forward />
           </button>
+
+          <section className="panel custom-moment" aria-labelledby="custom-moment-head">
+            <div className="custom-moment-heading">
+              <span className="custom-moment-icon" aria-hidden="true">
+                <Sparkles width={20} height={20} />
+              </span>
+              <span>
+                <span className="eyebrow">YOUR LIFE, YOUR LANGUAGE</span>
+                <h2 id="custom-moment-head">Make your own moment</h2>
+              </span>
+            </div>
+            <p className="muted small-text">
+              Tell Gemini what you need to say. It will make a short {language.name} warm-up and
+              conversation just for that situation.
+            </p>
+            <form className="custom-moment-form" onSubmit={makeMoment}>
+              <label className="sr-only" htmlFor="custom-moment-request">
+                Describe your conversation
+              </label>
+              <input
+                id="custom-moment-request"
+                className="field"
+                value={momentRequest}
+                onChange={(event) => {
+                  setMomentRequest(event.target.value);
+                  setMomentError('');
+                }}
+                placeholder="e.g. Ask my dad for allowance"
+                maxLength={240}
+                disabled={makingMoment}
+              />
+              <button className="primary" disabled={makingMoment || momentRequest.trim().length < 6}>
+                <Sparkles width={17} height={17} />
+                {makingMoment ? 'Making your moment…' : 'Make this moment'}
+              </button>
+            </form>
+            <div className="custom-moment-examples" aria-label="Example moments">
+              {MOMENT_EXAMPLES.map((example) => (
+                <button key={example} type="button" className="pill" onClick={() => setMomentRequest(example)}>
+                  {example}
+                </button>
+              ))}
+            </div>
+            {live === false && (
+              <p className="custom-moment-note">
+                Gemini is not configured yet. Ready-made and previously created moments still work.
+              </p>
+            )}
+            {momentError && (
+              <p className="form-error" role="alert">
+                {momentError}
+              </p>
+            )}
+
+            {customMoments.length > 0 && (
+              <div className="saved-moments">
+                <h3>Your moments</h3>
+                <ul className="scenario-grid compact custom-moment-list">
+                  {customMoments.slice(0, 3).map(({ scenario: saved }) => (
+                    <li key={saved.id}>
+                      <button className={`scenario-card tone-${saved.tone}`} onClick={() => onStart(saved.id)}>
+                        <span className="glyph" lang={language.htmlLang} aria-hidden="true">
+                          {saved.glyph}
+                        </span>
+                        <span className="scenario-body">
+                          <b>{saved.title}</b>
+                          <small>{saved.blurb}</small>
+                          <small className="scenario-meta">
+                            with {saved.persona.name} · {state.lessons?.[saved.id] ? 'ready to revisit' : 'learn the lines first'}
+                          </small>
+                        </span>
+                        <Forward width={18} height={18} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {customMoments.length > 3 && (
+                  <button className="link-btn tiny saved-moments-more" onClick={() => onRoute('learn')}>
+                    See all {customMoments.length} of your moments
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
 
           <section className="moments" aria-labelledby="pick-head">
             <div className="section-head">
@@ -187,10 +320,19 @@ export default function HomeScreen({ progress, language, live, t, onRoute, onSta
             </button>
           </section>
 
-          <p className="foot">
-            <span className={`dot ${live ? 'live' : ''}`} aria-hidden="true" />
-            {live ? 'Live conversation' : 'Scripted demo, ready offline'}
-          </p>
+          <div className="home-meta">
+            <p className="foot">
+              <span className={`dot ${live ? 'live' : ''}`} aria-hidden="true" />
+              {live === null
+                ? 'Checking Gemini…'
+                : live
+                  ? 'Gemini configured'
+                  : 'Scripted demo, ready offline'}
+            </p>
+            <button className="link-btn tiny" onClick={() => onRoute('feedback')}>
+              Share feedback
+            </button>
+          </div>
         </div>
       </div>
     </div>

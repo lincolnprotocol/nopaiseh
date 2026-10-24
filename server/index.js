@@ -1,6 +1,6 @@
-// BiLingos API: Amazon Bedrock for the conversation, Amazon Polly for Mandarin voice,
-// and a small feedback inbox. All optional: if Bedrock or Polly is not configured the app
-// falls back to demo mode on its own.
+// BiLingos API: Gemini for adaptive conversation, Amazon Polly for Mandarin voice,
+// and a small feedback inbox. All integrations are optional; the app falls back to its
+// authored conversation and browser voice when they are not configured.
 
 import 'dotenv/config';
 import crypto from 'node:crypto';
@@ -8,32 +8,41 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { PollyClient, SynthesizeSpeechCommand } from '@aws-sdk/client-polly';
 import { languages } from '../src/data/languages.js';
 import { buildNaturalSsml, normaliseVoiceRequest } from './tts.js';
 import { getScenario } from '../src/data/scenarios.js';
 import { buildSystemPrompt, buildUserPrompt, extractJson, normalizeTurn } from './prompt.js';
+import { DEFAULT_GEMINI_MODEL, generateGeminiTurn } from './gemini.js';
+import {
+  buildMomentSystemPrompt,
+  buildMomentUserPrompt,
+  buildMomentRepairPrompt,
+  normalizeGeneratedMoment,
+  normalizeMomentRequest,
+  signScenarioRef,
+  verifyScenarioRef,
+} from './moment.js';
 import { appendFeedback, readFeedback, summarize, validateFeedback } from './feedback.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 8787;
 const REGION = process.env.AWS_REGION || 'ap-southeast-1';
-const MODEL_ID = process.env.BEDROCK_MODEL_ID || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const MOMENT_SIGNING_SECRET = process.env.MOMENT_SIGNING_SECRET || GEMINI_API_KEY;
 const FEEDBACK_FILE = process.env.FEEDBACK_FILE || path.join(here, 'feedback.jsonl');
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
-let bedrock = null;
 let polly = null;
-const bedrockClient = () => (bedrock ??= new BedrockRuntimeClient({ region: REGION }));
 const pollyClient = () =>
   (polly ??= new PollyClient({ region: process.env.POLLY_REGION || REGION }));
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '16kb' }));
+app.use(express.json({ limit: '32kb' }));
 
-// Small per-IP rate limits so a public demo link cannot burn through AWS credits or fill the disk.
+// Small per-IP rate limits so a public demo link cannot burn through AI credits or fill the disk.
 function makeLimiter(maxPerMinute) {
   const hits = new Map();
   setInterval(() => {
@@ -50,35 +59,115 @@ function makeLimiter(maxPerMinute) {
   };
 }
 const apiLimit = makeLimiter(60);
+const momentLimit = makeLimiter(6);
 const feedbackLimit = makeLimiter(6);
 
 app.get('/api/health', (_req, res) => {
-  res.json({ bedrock: Boolean(MODEL_ID), region: REGION, languages: languages.map((l) => l.id) });
+  res.json({
+    conversation: {
+      provider: 'gemini',
+      configured: Boolean(GEMINI_API_KEY),
+      model: GEMINI_API_KEY ? GEMINI_MODEL : null,
+    },
+    languages: languages.map((l) => l.id),
+  });
 });
 
-app.post('/api/chat', apiLimit, async (req, res) => {
-  if (!MODEL_ID) return res.status(503).json({ error: 'not_configured' });
-
-  const { languageId = 'zh', scenarioId, history, final = false, slow = false } = req.body ?? {};
-  const language = languages.find((l) => l.id === languageId);
-  const scenario = language && getScenario(language.id, scenarioId);
-  if (!scenario || !Array.isArray(history) || history.length === 0 || history.length > 30) {
-    return res.status(400).json({ error: 'bad_request' });
+app.post('/api/moments', momentLimit, async (req, res) => {
+  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'not_configured' });
+  const language = languages.find((item) => item.id === req.body?.languageId);
+  const normalizedRequest = normalizeMomentRequest(req.body?.request);
+  if (!language || normalizedRequest.error) {
+    return res.status(400).json({ error: normalizedRequest.error ?? 'bad_language' });
   }
 
   try {
-    const out = await bedrockClient().send(
-      new ConverseCommand({
-        modelId: MODEL_ID,
-        system: [{ text: buildSystemPrompt(language, scenario, { slow: Boolean(slow), final: Boolean(final) }) }],
-        messages: [
-          { role: 'user', content: [{ text: buildUserPrompt(history, { final: Boolean(final) }) }] },
-        ],
-        inferenceConfig: { maxTokens: 800, temperature: 0.6 },
+    const generationOptions = {
+      apiKey: GEMINI_API_KEY,
+      model: GEMINI_MODEL,
+      systemPrompt: buildMomentSystemPrompt(language),
+      timeoutMs: 25_000,
+      maxOutputTokens: 6000,
+      temperature: 0.7,
+    };
+    let text = await generateGeminiTurn({
+      ...generationOptions,
+      userPrompt: buildMomentUserPrompt(normalizedRequest.request),
+    });
+    let scenario;
+    try {
+      scenario = normalizeGeneratedMoment(language, extractJson(text));
+    } catch (validationError) {
+      text = await generateGeminiTurn({
+        ...generationOptions,
+        userPrompt: buildMomentRepairPrompt(
+          normalizedRequest.request,
+          text,
+          validationError?.message,
+        ),
+      });
+      scenario = normalizeGeneratedMoment(language, extractJson(text));
+    }
+    const scenarioRef = signScenarioRef(language.id, scenario, MOMENT_SIGNING_SECRET);
+    res.json({ scenario, scenarioRef, createdAt: Date.now(), source: 'gemini' });
+  } catch (err) {
+    console.error('moment generation failed:', err?.name, err?.message);
+    res.status(502).json({ error: 'generation_failed' });
+  }
+});
+
+app.post('/api/chat', apiLimit, async (req, res) => {
+  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'not_configured' });
+
+  const { languageId = 'zh', scenarioId, scenarioRef = '', history, slow = false } = req.body ?? {};
+  const language = languages.find((item) => item.id === languageId);
+  let scenario = language && getScenario(language.id, scenarioId);
+  if (!scenario && language && scenarioRef) {
+    try {
+      scenario = verifyScenarioRef(scenarioRef, language, MOMENT_SIGNING_SECRET);
+    } catch {
+      return res.status(400).json({ error: 'invalid_moment' });
+    }
+  }
+
+  const validHistory =
+    Array.isArray(history) &&
+    history.length > 0 &&
+    history.length <= 30 &&
+    history.every(
+      (message) =>
+        message &&
+        (message.role === 'ai' || message.role === 'user') &&
+        typeof message.text === 'string' &&
+        message.text.trim() &&
+        message.text.length <= 300,
+    ) &&
+    history.reduce((total, message) => total + message.text.length, 0) <= 5000 &&
+    history.at(-1)?.role === 'user';
+  if (!scenario || scenario.id !== scenarioId || !validHistory) {
+    return res.status(400).json({ error: 'bad_request' });
+  }
+
+  const userTurns = history.filter((message) => message.role === 'user').length;
+  const totalReplies = scenario.script.length - 1;
+  if (userTurns < 1 || userTurns > totalReplies) return res.status(400).json({ error: 'bad_turn' });
+  const final = userTurns >= totalReplies;
+  const plannedStep = scenario.script[userTurns];
+
+  try {
+    const text = await generateGeminiTurn({
+      apiKey: GEMINI_API_KEY,
+      model: GEMINI_MODEL,
+      systemPrompt: buildSystemPrompt(language, scenario, {
+        slow: Boolean(slow),
+        final,
       }),
-    );
-    const text = (out.output?.message?.content ?? []).map((c) => c.text ?? '').join('');
-    res.json(normalizeTurn(extractJson(text), { final: Boolean(final) }));
+      userPrompt: buildUserPrompt(history, { final, scenario, plannedStep }),
+    });
+    const turn = normalizeTurn(extractJson(text), { final });
+    turn.suggestions = final ? [] : plannedStep.suggestions;
+    if (turn.learned.length === 0) turn.learned = plannedStep.learned;
+    res.json({ ...turn, final, source: 'gemini' });
   } catch (err) {
     console.error('chat failed:', err?.name, err?.message);
     res.status(502).json({ error: 'model_failed' });
@@ -142,7 +231,7 @@ app.post('/api/feedback', feedbackLimit, (req, res) => {
   }
 });
 
-// Organisers read feedback with /api/feedback?key=ADMIN_KEY. Off unless ADMIN_KEY is set.
+// Organisers read feedback with an Authorization: Bearer ADMIN_KEY header. Off unless ADMIN_KEY is set.
 const sameKey = (a, b) =>
   crypto.timingSafeEqual(
     crypto.createHash('sha256').update(String(a)).digest(),
@@ -150,7 +239,9 @@ const sameKey = (a, b) =>
   );
 
 app.get('/api/feedback', (req, res) => {
-  if (!ADMIN_KEY || !sameKey(req.query.key ?? '', ADMIN_KEY)) return res.status(404).json({ error: 'not_found' });
+  const authorization = req.get('authorization') ?? '';
+  const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? '';
+  if (!ADMIN_KEY || !sameKey(token, ADMIN_KEY)) return res.status(404).json({ error: 'not_found' });
   const entries = readFeedback(FEEDBACK_FILE);
   res.json({ summary: summarize(entries), entries });
 });
@@ -167,9 +258,9 @@ if (fs.existsSync(dist)) {
 app.listen(PORT, () => {
   console.log(`BiLingos API on http://localhost:${PORT}`);
   console.log(
-    MODEL_ID
-      ? `Bedrock: on (${REGION}, ${MODEL_ID})`
-      : 'Bedrock: off. Set BEDROCK_MODEL_ID in .env. The app will use scripted demo replies.',
+    GEMINI_API_KEY
+      ? `Gemini: on (${GEMINI_MODEL})`
+      : 'Gemini: off. Set GEMINI_API_KEY in .env. The app will use scripted demo replies.',
   );
   console.log(`Feedback file: ${FEEDBACK_FILE}${ADMIN_KEY ? ' (admin view on)' : ''}`);
 });

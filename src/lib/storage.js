@@ -10,7 +10,13 @@
 //   - export / import, because "no accounts" should not mean "lose everything with your phone"
 
 import { ACHIEVEMENTS } from '../data/achievements.js';
+import { getLanguage } from '../data/languages.js';
 import { MISSION_POOL, missionsForDay } from '../data/missions.js';
+import {
+  MAX_CUSTOM_MOMENTS,
+  normalizeCustomMomentCollection,
+  normalizeCustomMomentRecord,
+} from './customMoment.js';
 
 const KEY = 'bilingos:v3';
 const OLD_KEYS = ['bilingos:v2', 'bilingos:v1'];
@@ -56,6 +62,7 @@ const blankLang = () => ({
   sessions: 0,
   phrases: {}, // text -> { text, roman, english, savedAt, box, due, reps, lapses }
   lessons: {}, // scenarioId -> true
+  customMoments: {}, // scenarioId -> { scenario, scenarioRef, createdAt }
   counters: { build: 0, write: 0, say: 0, review: 0 },
 });
 
@@ -123,6 +130,18 @@ function migrate(old, key) {
   };
 }
 
+function makeFeedbackEntry(entry) {
+  const id =
+    typeof entry?.id === 'string' && entry.id
+      ? entry.id
+      : globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return {
+    ...entry,
+    id,
+    submittedAt: entry?.submittedAt ?? entry?.at ?? new Date().toISOString(),
+  };
+}
+
 function normalise(saved) {
   const langs = {};
   for (const [id, state] of Object.entries(saved.langs ?? {})) {
@@ -136,6 +155,7 @@ function normalise(saved) {
           { box: 0, due: 0, reps: 0, lapses: 0, savedAt: Date.now(), ...p, text },
         ]),
       ),
+      customMoments: normalizeCustomMomentCollection(getLanguage(id), state?.customMoments),
     };
   }
   return {
@@ -148,15 +168,19 @@ function normalise(saved) {
     day: saved.day ?? null,
     freezes: Number.isFinite(saved.freezes) ? saved.freezes : DEFAULTS.freezes,
     langs,
-    outbox: Array.isArray(saved.outbox) ? saved.outbox : [],
+    outbox: Array.isArray(saved.outbox)
+      ? saved.outbox.filter((entry) => entry && typeof entry === 'object').map(makeFeedbackEntry)
+      : [],
   };
 }
 
 export function saveProgress(progress) {
   try {
     localStorage.setItem(KEY, JSON.stringify(progress));
+    return true;
   } catch {
     // private mode or quota: the session still works, it just will not persist
+    return false;
   }
 }
 
@@ -323,6 +347,28 @@ export function completeLesson(progress, lang, scenarioId, phrases, xpGained) {
 export const lessonDone = (progress, lang, scenarioId) =>
   Boolean(langState(progress, lang).lessons?.[scenarioId]);
 
+export function customMomentsFor(progress, lang) {
+  return Object.values(langState(progress, lang).customMoments ?? {}).sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
+}
+
+export function saveCustomMoment(progress, lang, record) {
+  const normalized = normalizeCustomMomentRecord(getLanguage(lang), record);
+  const cur = langState(progress, lang);
+  const records = [
+    normalized,
+    ...Object.values(cur.customMoments ?? {}).filter(
+      (saved) => saved.scenario?.id !== normalized.scenario.id,
+    ),
+  ]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, MAX_CUSTOM_MOMENTS);
+  return withLang(progress, lang, {
+    customMoments: Object.fromEntries(records.map((saved) => [saved.scenario.id, saved])),
+  });
+}
+
 export function recordReview(progress, lang, { xpGained, reviewed = 0 }) {
   const next = reviewed > 0 ? bumpMission(progress, 'review', reviewed) : progress;
   return checkAchievements(addXp(next, lang, xpGained), lang);
@@ -441,7 +487,7 @@ export function earnedAchievements(progress) {
 /* ---------------------------------------------------------------- feedback */
 
 export function queueFeedback(progress, entry) {
-  return { ...progress, outbox: [...progress.outbox, entry].slice(-20) };
+  return { ...progress, outbox: [...progress.outbox, makeFeedbackEntry(entry)].slice(-20) };
 }
 
 /* ----------------------------------------------------------- export/import */

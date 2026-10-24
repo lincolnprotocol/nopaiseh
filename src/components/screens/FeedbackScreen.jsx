@@ -58,14 +58,23 @@ export default function FeedbackScreen({ initialType = 'feature', initialPhrase 
       contact: contact.trim(),
       rating,
       appLanguage,
-      at: new Date().toISOString(),
+      submittedAt: new Date().toISOString(),
     };
     try {
       await postFeedback(entry);
       setStatus('sent');
-    } catch {
-      onQueue(entry); // kept on this device, retried next time the app opens
-      setStatus('saved');
+    } catch (err) {
+      if (err?.retryable === false) {
+        setStatus('idle');
+        setError('The server could not accept that feedback. Check the fields and try again.');
+        return;
+      }
+      const saved = onQueue(entry);
+      if (saved) setStatus('saved');
+      else {
+        setStatus('idle');
+        setError('We could not reach the server or save this on your device. Please copy your message and try again later.');
+      }
     }
   }
 
@@ -80,7 +89,7 @@ export default function FeedbackScreen({ initialType = 'feature', initialPhrase 
           <p>
             {status === 'sent'
               ? 'Your feedback reached the team.'
-              : "We couldn't reach the server, so it is saved on this device and will be sent next time you open the app."}
+              : "We couldn't reach the server, so it is saved on this device and will be sent automatically when you are online."}
           </p>
           <button className="primary" onClick={onBack}>
             Back to learning

@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getLanguage } from './data/languages.js';
 import { getScenario } from './data/scenarios.js';
-import { postFeedback } from './lib/api.js';
+import { generateMoment, postFeedback } from './lib/api.js';
 import { translator, uiHtmlLang } from './lib/i18n.js';
 import { configureSpeech, stopSpeaking, unlockAudio } from './lib/speech.js';
 import {
   allPhrases,
   completeLesson,
+  customMomentsFor,
   duePhrases,
   exportProgress,
   gradePhrase,
@@ -19,6 +20,7 @@ import {
   recordReview,
   recordSession,
   resetProgress,
+  saveCustomMoment,
   savePhrase,
   saveProgress,
 } from './lib/storage.js';
@@ -43,10 +45,14 @@ export default function App() {
   const [flow, setFlow] = useState(null); // { name: 'lesson' | 'chat' | 'summary', ... }
   const [feedback, setFeedback] = useState(null); // { type, phrase }
   const [runId, setRunId] = useState(0);
-  const [live, setLive] = useState(false);
+  const [live, setLive] = useState(null);
+  const flushingFeedback = useRef(false);
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
 
   const { settings } = progress;
   const language = getLanguage(settings.lang);
+  const customMomentRecords = customMomentsFor(progress, language.id);
   const t = useMemo(() => translator(settings.uiLang), [settings.uiLang]);
   const { layout } = useLayout(settings.layout);
 
@@ -60,39 +66,60 @@ export default function App() {
     configureSpeech({ style: settings.voiceStyle, voiceOverrides: settings.voiceOverrides });
   }, [settings.voiceStyle, settings.voiceOverrides]);
 
-  useEffect(() => saveProgress(progress), [progress]);
+  useEffect(() => {
+    saveProgress(progress);
+  }, [progress]);
 
-  // Is Bedrock answering, or are we on scripted demo replies?
+  // Is Gemini configured, or are we on scripted demo replies?
   useEffect(() => {
     fetch('/api/health')
       .then((r) => (r.ok ? r.json() : null))
-      .then((h) => setLive(Boolean(h?.bedrock)))
+      .then((h) => setLive(Boolean(h?.conversation?.configured)))
       .catch(() => setLive(false));
   }, []);
 
-  // Retry any feedback that could not be sent last time.
-  useEffect(() => {
-    if (progress.outbox.length === 0) return undefined;
-    let cancelled = false;
-    (async () => {
-      const sent = new Set();
+  const flushFeedback = useCallback(async () => {
+    if (flushingFeedback.current || progress.outbox.length === 0) {
+      return { sent: 0, pending: progress.outbox.length };
+    }
+    flushingFeedback.current = true;
+    const sent = new Set();
+    try {
+      // Process entries independently so one damaged or rate-limited item cannot block the rest.
       for (const entry of progress.outbox) {
         try {
           await postFeedback(entry);
-          sent.add(entry.at);
+          sent.add(entry.id);
         } catch {
-          break;
+          // Keep transient and rejected entries available for a later manual retry.
         }
       }
-      if (sent.size > 0 && !cancelled) {
-        setProgress((p) => ({ ...p, outbox: p.outbox.filter((e) => !sent.has(e.at)) }));
+      if (sent.size > 0) {
+        setProgress((p) => ({ ...p, outbox: p.outbox.filter((entry) => !sent.has(entry.id)) }));
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      return { sent: sent.size, pending: progress.outbox.length - sent.size };
+    } finally {
+      flushingFeedback.current = false;
+    }
+  }, [progress.outbox]);
+
+  // Retry on launch, after a newly queued item, and whenever the browser comes back online.
+  useEffect(() => {
+    flushFeedback();
+    const retry = () => flushFeedback();
+    window.addEventListener('online', retry);
+    return () => window.removeEventListener('online', retry);
+  }, [flushFeedback]);
+
+  const queueFeedbackEntry = useCallback(
+    (entry) => {
+      const next = queueFeedback(progress, entry);
+      const saved = saveProgress(next);
+      setProgress(next);
+      return saved;
+    },
+    [progress],
+  );
 
   const setSettings = useCallback(
     (patch) => setProgress((p) => ({ ...p, settings: { ...p.settings, ...patch } })),
@@ -158,6 +185,26 @@ export default function App() {
     }
   };
 
+  const createMoment = async (request) => {
+    unlockAudio();
+    const generated = await generateMoment({ languageId: language.id, request });
+    const record = {
+      scenario: generated.scenario,
+      scenarioRef: generated.scenarioRef,
+      createdAt: generated.createdAt ?? Date.now(),
+    };
+    const next = saveCustomMoment(progressRef.current, language.id, record);
+    if (!saveProgress(next)) {
+      const error = new Error('Custom moment could not be saved');
+      error.code = 'storage_failed';
+      throw error;
+    }
+    progressRef.current = next;
+    setProgress(next);
+    setFlow({ name: 'lesson', scenarioId: generated.scenario.id });
+    return generated.scenario;
+  };
+
   const finishLesson = ({ phrases, skipped }) => {
     setProgress((p) => completeLesson(p, language.id, flow.scenarioId, phrases, skipped ? 5 : 15));
     startChat(flow.scenarioId);
@@ -186,7 +233,12 @@ export default function App() {
   /* ----------------------------------------------------------------- render */
 
   const due = duePhrases(progress, language.id).length;
-  const scenario = flow?.scenarioId ? getScenario(language.id, flow.scenarioId) : null;
+  const customMomentRecord = flow?.scenarioId
+    ? customMomentRecords.find((record) => record.scenario.id === flow.scenarioId)
+    : null;
+  const scenario = flow?.scenarioId
+    ? getScenario(language.id, flow.scenarioId) ?? customMomentRecord?.scenario
+    : null;
   const immersive = Boolean(flow && scenario);
 
   let content;
@@ -208,6 +260,7 @@ export default function App() {
         key={runId}
         language={language}
         scenario={scenario}
+        scenarioRef={customMomentRecord?.scenarioRef ?? ''}
         settings={settings}
         layout={layout}
         onExit={goHome}
@@ -236,11 +289,19 @@ export default function App() {
         initialPhrase={feedback.phrase}
         appLanguage={language.id}
         onBack={goHome}
-        onQueue={(entry) => setProgress((p) => queueFeedback(p, entry))}
+        onQueue={queueFeedbackEntry}
       />
     );
   } else if (route === 'learn') {
-    content = <LearnScreen progress={progress} language={language} t={t} onStart={start} />;
+    content = (
+      <LearnScreen
+        progress={progress}
+        language={language}
+        customMoments={customMomentRecords}
+        t={t}
+        onStart={start}
+      />
+    );
   } else if (route === 'review') {
     content = (
       <ReviewScreen
@@ -282,6 +343,8 @@ export default function App() {
         onImport={(text) => setProgress(importProgress(text))}
         onReset={() => setProgress(resetProgress())}
         onRoute={navigate}
+        pendingFeedback={progress.outbox.length}
+        onRetryFeedback={flushFeedback}
       />
     );
   } else {
@@ -290,9 +353,11 @@ export default function App() {
         progress={progress}
         language={language}
         live={live}
+        customMoments={customMomentRecords}
         t={t}
         onRoute={navigate}
         onStart={start}
+        onCreateMoment={createMoment}
         onLanguage={changeLanguage}
       />
     );

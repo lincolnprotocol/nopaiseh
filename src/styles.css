@@ -572,6 +572,18 @@ kbd {
   font-size: 0.8rem;
 }
 
+.home-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.home-meta .link-btn {
+  margin-left: auto;
+}
+
 .dot {
   width: 8px;
   height: 8px;
@@ -3668,4 +3680,121 @@ a[href^='https://www.netlify.com'],
 .outside-phrase span {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+/* ---------- Gemini-created practice moments ---------- */
+.custom-moment {
+  margin-top: 14px;
+  border-left: 5px solid var(--sky);
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--sky) 24%, transparent), transparent 42%),
+    var(--surface);
+}
+
+.custom-moment-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.custom-moment-heading h2 {
+  margin: 0;
+  font-size: 1.18rem;
+}
+
+.custom-moment-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--tone-sky);
+  color: var(--teal);
+}
+
+.custom-moment-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: stretch;
+}
+
+.custom-moment-form .field {
+  min-width: 0;
+  margin: 0;
+}
+
+.custom-moment-form .primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.custom-moment-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.custom-moment-examples .pill {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.custom-moment-note {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.custom-moment .form-error {
+  margin-top: 9px;
+}
+
+.saved-moments {
+  margin-top: 15px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.saved-moments h3 {
+  margin: 0 0 9px;
+  font-size: 0.92rem;
+}
+
+.saved-moments-more {
+  margin-top: 10px;
+}
+
+.custom-moment-list .scenario-card {
+  min-height: 76px;
+  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--sky) 55%, var(--line));
+}
+
+.custom-moment-list .glyph {
+  width: 44px;
+  height: 44px;
+  font-size: 1.25rem;
+}
+
+.pill-tag.ai-made {
+  background: color-mix(in srgb, var(--sky) 28%, var(--surface));
+  color: var(--teal);
+}
+
+@media (max-width: 560px) {
+  .custom-moment-form {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-moment-form .primary {
+    width: 100%;
+  }
 }

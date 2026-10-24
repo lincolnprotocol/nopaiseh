@@ -66,7 +66,7 @@ BiLingos does not use one identical robot voice for every screen anymore:
   current device, lets the learner pick one, previews a casual local line, and offers Natural / Extra clear /
   Lively delivery.
 - **Conversation has human timing.** Fast scripted replies pause long enough for the typing beat to feel real;
-  a slow Bedrock response does not get an artificial pause piled on top. The reply bubble paints before speech
+  a slow Gemini response does not get an artificial pause piled on top. The reply bubble paints before speech
   begins.
 - **Mandarin Polly has natural SSML phrasing.** Punctuation gets subtle, profile-specific pauses and each role
   gets a controlled speech rate. All SSML is generated from allowlisted profiles on the server; learner text is
@@ -93,8 +93,9 @@ voice, but the picker makes the best available option visible instead of silentl
 
 ## What is in the app
 
-- **3 languages x 4 real-life scenarios** — hawker/prata stall, dinner with grandma, chatting with a friend, and
-  first day at the office.
+- **3 languages x 4 ready-made scenarios**, plus **Make your own moment** — describe a situation such as
+  asking Dad for allowance and Gemini creates a private, language-specific warm-up and conversation. Up to eight
+  generated moments per language are kept in this browser and included in backups.
 - **Real talk** — a dictionary pairing the textbook form with what people actually say (你好 vs 吃饱了没, *Apa
   khabar* vs *Dah makan?*, வணக்கம் vs சாப்பிட்டியா?). Every entry says **who it is safe to say it to**, because
   the fastest way back to feeling paiseh is using friend-slang on your grandmother's sister.
@@ -112,24 +113,38 @@ voice, but the picker makes the best available option visible instead of silentl
 - **Backup and restore** — progress lives in localStorage with no accounts, so Settings lets you copy a backup
   and paste it back on another device.
 - **Feedback, "Suggest a language" and "Fix a phrase"** forms. Saved to `server/feedback.jsonl`. Read it with
-  `npm run feedback`, or set `ADMIN_KEY` in `.env` and open `/api/feedback?key=YOUR_KEY`. If the server is down,
-  feedback is kept on the device and sent next time.
+  `npm run feedback`, or set `ADMIN_KEY` in `.env` and request `/api/feedback` with an
+  `Authorization: Bearer YOUR_KEY` header. If the server is down, feedback is kept on the device,
+  retried when the browser comes online, and can be retried manually from Settings.
 - **Device check** (Settings) — confirms every phrase can be built from word tiles in *this* browser. Chinese word
   splitting depends on `Intl.Segmenter`, which some browsers do not have, so run this on any machine you are about
   to present on.
 
-## Turn on the AWS parts (optional)
+## Turn on adaptive AI conversation (optional)
 
 1. Copy `.env.example` to `.env`.
-2. In the AWS console, enable a Claude model in Amazon Bedrock and paste its exact model ID into `BEDROCK_MODEL_ID`.
-3. Provide AWS credentials (`aws configure`, or the variables in `.env`).
-4. Restart `npm run dev`. The home footer changes to "Live AI conversation".
+2. Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/app/apikey).
+3. Put it in `.env` as `GEMINI_API_KEY=...`. The key is read only by the Node server; never add a
+   `VITE_` prefix or place it in frontend code.
+4. Optionally change `GEMINI_MODEL` (the default is `gemini-2.5-flash`), then restart `npm run dev`.
 
-Amazon Polly (neural voice "Zhiyu") is used for Mandarin dialogue, with role-specific speech rates and
-punctuation-aware SSML pauses. Polly has no Malay or Tamil voice in this app, so those use the best matching
-Singapore or regional voice exposed by the browser. Settings lets the learner preview and override that choice.
-If a device has no Tamil or Malay voice installed, the chat shows a note instead of silently doing nothing. If
-anything fails, the app falls back to browser speech and scripted conversation, so the demo never dies on stage.
+Gemini receives the selected scenario, character, learning language and recent transcript. It responds to
+whatever the learner types or says while staying in character, returns gentle corrections, and follows the
+phrases taught in the warm-up. From Home, **Make your own moment** also lets a learner describe a situation in
+plain English; Gemini builds a validated five-step lesson and conversation for the selected language. Generated
+moments are signed by the server, saved only in that browser's progress, and retain a complete scripted fallback.
+The conversation remains deliberately bounded to the lesson length. If Gemini is unconfigured, times out, or
+returns an unusable response, the app clearly switches to its scripted fallback instead of breaking the session.
+
+For deployed apps, set a long, stable `MOMENT_SIGNING_SECRET` so saved custom moments remain valid when the Gemini
+key is rotated or the app runs on multiple instances. Local development falls back to using `GEMINI_API_KEY` for
+signing.
+
+Amazon Polly remains optional for Mandarin dialogue, with role-specific speech rates and punctuation-aware
+SSML pauses. Configure normal AWS credentials to enable it. Polly has no Malay or Tamil voice in this app, so
+those use the best matching Singapore or regional voice exposed by the browser. Settings lets the learner
+preview and override that choice. If a device has no Tamil or Malay voice installed, the chat shows a note
+instead of silently doing nothing. If speech synthesis fails, the app falls back to browser speech.
 
 ## Add or edit content
 
@@ -144,8 +159,10 @@ anything fails, the app falls back to browser speech and scripted conversation, 
 | `src/components/` | Lesson (warm-up), Chat, Builder (word tiles), WriteIt (writing), Summary, Question, SayIt |
 | `src/components/layout/` | App shell, sidebar and bottom bar, layout picker |
 | `src/lib/` | AI calls, offline fallback, voice selection and persona delivery, progress and spaced repetition, pronunciation scoring, word tiles, writing checks, lesson and quiz helpers, layout resolution, UI strings |
+| `server/gemini.js` | Server-only Gemini REST client with timeout and JSON response mode |
+| `server/moment.js` | Safe custom-moment prompting plus signed scenario references |
 | `server/tts.js` | Safe SSML builder for natural Mandarin role profiles and punctuation-aware pauses |
-| `server/` | Express API: Bedrock chat, Polly voice, feedback inbox |
+| `server/` | Express API: Gemini chat, Polly voice, feedback inbox |
 
 To add a language: add an entry in `languages.js`, create `src/data/<id>.js` with scenarios (copy `ms.js`), add a
 `slang.js` section, register it in `scenarios.js`, and add a rule for it in `server/prompt.js`.
@@ -164,7 +181,8 @@ is what the in-app **Device check** is for.
 ## Deploy for the showcase
 
 `npm run build`, then `npm start` serves the app and API together on one port (`PORT`, default 8787).
-Works on any Node host (AWS App Runner, Elastic Beanstalk, Render, Railway). Set the env vars from `.env` there.
+Works on any Node host (AWS App Runner, Elastic Beanstalk, Render, Railway). Set `GEMINI_API_KEY` and any
+optional AWS/feedback variables from `.env` there.
 Never commit `.env`. Note that `server/feedback.jsonl` lives on the server's disk, so on hosts with temporary disks
 download it before redeploying.
 

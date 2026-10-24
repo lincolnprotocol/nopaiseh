@@ -20,6 +20,8 @@ export default function SettingsScreen({
   onImport,
   onReset,
   onRoute,
+  pendingFeedback = 0,
+  onRetryFeedback,
 }) {
   const [importText, setImportText] = useState('');
   const [message, setMessage] = useState('');
@@ -49,6 +51,17 @@ export default function SettingsScreen({
       setError(err.message || 'That backup could not be read.');
       setMessage('');
     }
+  }
+
+  async function retryFeedback() {
+    const result = await onRetryFeedback?.();
+    if (!result) return;
+    setError('');
+    setMessage(
+      result.pending === 0
+        ? `Sent ${result.sent || 'all'} pending feedback ${result.sent === 1 ? 'item' : 'items'}.`
+        : `${result.sent} sent; ${result.pending} still waiting for a connection.`,
+    );
   }
 
   // The productised version of a one-off console check: does every phrase the learner will be asked
@@ -207,6 +220,16 @@ export default function SettingsScreen({
           your browser data clears your streak. A backup is a long line of text you can paste back in
           on another device.
         </p>
+        {pendingFeedback > 0 && (
+          <div className="feedback low" role="status">
+            <b>{pendingFeedback} feedback {pendingFeedback === 1 ? 'item is' : 'items are'} waiting to send.</b>
+            <div className="button-row">
+              <button className="ghost small" onClick={retryFeedback}>
+                Retry now
+              </button>
+            </div>
+          </div>
+        )}
         <div className="button-row">
           <button className="ghost small" onClick={copyBackup}>
             <Download width={16} height={16} /> Copy backup
