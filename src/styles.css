@@ -3753,8 +3753,23 @@ a[href^='https://www.netlify.com'],
   font-size: 0.78rem;
 }
 
-.custom-moment .form-error {
-  margin-top: 9px;
+.custom-moment-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--sky) 18%, var(--surface));
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.custom-moment-status svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--teal);
 }
 
 .saved-moments {

@@ -13,6 +13,8 @@ const MOMENT_EXAMPLES = [
   'Explain why I came home late',
   'Invite my cousin out for lunch',
 ];
+const AUTO_RETRY_CODES = new Set(['provider_busy', 'generation_failed']);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Home is organised around places the learner can use their mother tongue, not around a score.
 // Points and milestones still exist for learners who enjoy them, but they live in Progress rather
@@ -57,23 +59,38 @@ export default function HomeScreen({
     setMakingMoment(true);
     setMomentError('');
     try {
-      await onCreateMoment(request);
-      setMomentRequest('');
-    } catch (error) {
-      const messages = {
-        not_configured: 'Custom moments are unavailable right now. You can still use every ready-made or saved moment.',
-        slow_down: 'A few moments were just created. Wait a minute, then try again.',
-        request_too_short: 'Describe the moment in a little more detail.',
-        request_too_long: 'Keep your request under 240 characters.',
-        generation_invalid: "Gemini made a response that wasn't lesson-ready. Try once more or reword the situation.",
-        generation_failed: 'The Gemini connection failed before the moment was ready. Please try again.',
-        provider_busy: 'Gemini is busy right now—your request is fine. Wait a few seconds, then press the button again.',
-        provider_limit: 'The Gemini usage limit has been reached. Wait for the limit to reset, then try again.',
-        provider_auth: 'The Gemini connection could not authenticate. The app owner needs to replace the API key.',
-        model_unavailable: 'The selected Gemini model is unavailable. The app owner needs to update its model setting.',
-        storage_failed: "Your browser couldn't save the new moment. Free some browser storage and try again.",
-      };
-      setMomentError(messages[error?.code] ?? 'Could not create that moment. Check your connection and try again.');
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await onCreateMoment(request);
+          setMomentRequest('');
+          return;
+        } catch (error) {
+          if (attempt === 0 && (!error?.code || AUTO_RETRY_CODES.has(error.code))) {
+            setMomentError('Gemini needs a little longer. Trying again automatically…');
+            await wait(4500);
+            continue;
+          }
+
+          const messages = {
+            not_configured: 'Custom moments are taking a break. Ready-made and saved moments still work.',
+            slow_down: 'Your request is still here. Give it a minute, then tap the button again.',
+            request_too_short: 'Add a little more detail about the conversation you want.',
+            request_too_long: 'Shorten the request to 240 characters, then try again.',
+            generation_invalid: 'That moment is not ready yet. Rewording the situation may help.',
+            generation_failed: 'That moment is not ready yet. Your request is still here, so you can try again.',
+            provider_busy: 'That moment is not ready yet. Your request is still here—try again in a minute.',
+            provider_limit: 'Custom moments are resting for now. Ready-made and saved moments still work.',
+            provider_auth: 'Custom moments are temporarily unavailable. Ready-made and saved moments still work.',
+            model_unavailable: 'Custom moments are temporarily unavailable. Ready-made and saved moments still work.',
+            storage_failed: 'This browser could not keep the new moment. Free some browser storage and try again.',
+          };
+          setMomentError(
+            messages[error?.code] ??
+              'That moment is not ready yet. Your request is still here, so you can try again.',
+          );
+          return;
+        }
+      }
     } finally {
       setMakingMoment(false);
     }
@@ -167,8 +184,9 @@ export default function HomeScreen({
               </p>
             )}
             {momentError && (
-              <p className="form-error" role="alert">
-                {momentError}
+              <p className="custom-moment-status" role="status" aria-live="polite">
+                <Sparkles width={15} height={15} />
+                <span>{momentError}</span>
               </p>
             )}
 
