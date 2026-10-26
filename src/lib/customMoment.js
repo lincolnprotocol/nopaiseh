@@ -120,8 +120,12 @@ export function normalizeCustomScenario(language, raw, { id = raw?.id } = {}) {
   });
 
   const name = required(raw.persona?.name, 50, 'Character name');
-  const native = required(raw.persona?.native, 50, 'Character name in the learning language');
-  requireTargetLanguage(language, native, 'Character name');
+  const nativeName = clean(raw.persona?.native, 50);
+  // A person's name may not have a translated form. This is display metadata, so it must not
+  // invalidate an otherwise correct target-language lesson.
+  const native = nativeName
+    ? required(nativeName, 50, 'Character name in the learning language')
+    : name;
   const role = requireEnglishMetadata(
     language,
     required(raw.persona?.role, 80, 'Character role'),

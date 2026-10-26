@@ -30,6 +30,7 @@ export function buildMomentSystemPrompt(language) {
     languageRule,
     'Use beginner to lower-intermediate language that sounds natural, not textbook-like or caricatured.',
     'Return one JSON object only. All title, blurb, doneLine, tip, role, and setting values must be in English.',
+    `persona.name is a short English display label. persona.native is how the learner would naturally address that person in ${language.name}; use the same name if it should not be translated.`,
     'Choose voiceProfile from: coach, elder, friend, stall, colleague.',
     'Create exactly 5 script steps. Step 1 opens the conversation. Steps 2-4 continue naturally. Step 5 closes warmly.',
     'Steps 1-4 must each contain exactly 2 short learner suggestions. Step 5 must contain an empty suggestions array.',
