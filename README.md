@@ -126,9 +126,10 @@ voice, but the picker makes the best available option visible instead of silentl
 2. Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/app/apikey).
 3. Put it in `.env` as `GEMINI_API_KEY=...`. The key is read only by the Node server; never add a
    `VITE_` prefix or place it in frontend code.
-4. Optionally change `GEMINI_MODEL` (the default is `gemini-3.8-flash`) or
-   `GEMINI_FALLBACK_MODEL` (default `gemini-3.1-flash-lite`), then restart `npm run dev`. The server retries
-   temporary 429/503 responses with exponential backoff and then tries the fallback model.
+4. Optionally change `GEMINI_MODEL` (the default is `gemini-3.8-flash`),
+   `GEMINI_MOMENT_MODEL` (default `gemini-3.1-flash-lite`) or `GEMINI_FALLBACK_MODEL`. Custom-moment
+   generation uses the lower-latency model first. Every model gets its own bounded timeout, so a stalled model
+   is skipped instead of cancelling all fallbacks. Temporary 429/503 responses use exponential backoff.
 
 Gemini receives the selected scenario, character, learning language and recent transcript. It responds to
 whatever the learner types or says while staying in character, returns gentle corrections, and follows the

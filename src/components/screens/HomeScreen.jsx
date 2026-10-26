@@ -13,7 +13,7 @@ const MOMENT_EXAMPLES = [
   'Explain why I came home late',
   'Invite my cousin out for lunch',
 ];
-const AUTO_RETRY_CODES = new Set(['provider_busy', 'generation_failed']);
+const AUTO_RETRY_CODES = new Set(['generation_failed']);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Home is organised around places the learner can use their mother tongue, not around a score.

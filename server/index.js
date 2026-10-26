@@ -34,10 +34,15 @@ const PORT = Number(process.env.PORT) || 8787;
 const REGION = process.env.AWS_REGION || 'ap-southeast-1';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const GEMINI_MOMENT_MODEL =
+  process.env.GEMINI_MOMENT_MODEL || DEFAULT_GEMINI_FALLBACK_MODEL;
 const GEMINI_FALLBACK_MODELS = [
   DEFAULT_GEMINI_MODEL,
   process.env.GEMINI_FALLBACK_MODEL || DEFAULT_GEMINI_FALLBACK_MODEL,
 ].filter((model, index, models) => model !== GEMINI_MODEL && models.indexOf(model) === index);
+const GEMINI_MOMENT_FALLBACK_MODELS = [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS].filter(
+  (model, index, models) => model !== GEMINI_MOMENT_MODEL && models.indexOf(model) === index,
+);
 const MOMENT_SIGNING_SECRET = process.env.MOMENT_SIGNING_SECRET || GEMINI_API_KEY;
 const FEEDBACK_FILE = process.env.FEEDBACK_FILE || path.join(here, 'feedback.jsonl');
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
@@ -76,6 +81,7 @@ app.get('/api/health', (_req, res) => {
       provider: 'gemini',
       configured: Boolean(GEMINI_API_KEY),
       model: GEMINI_API_KEY ? GEMINI_MODEL : null,
+      momentModel: GEMINI_API_KEY ? GEMINI_MOMENT_MODEL : null,
       fallbackModels: GEMINI_API_KEY ? GEMINI_FALLBACK_MODELS : [],
     },
     languages: languages.map((l) => l.id),
@@ -93,13 +99,14 @@ app.post('/api/moments', momentLimit, async (req, res) => {
   try {
     const generationOptions = {
       apiKey: GEMINI_API_KEY,
-      model: GEMINI_MODEL,
-      fallbackModels: GEMINI_FALLBACK_MODELS,
+      model: GEMINI_MOMENT_MODEL,
+      fallbackModels: GEMINI_MOMENT_FALLBACK_MODELS,
       systemPrompt: buildMomentSystemPrompt(language),
-      timeoutMs: 25_000,
-      maxOutputTokens: 6000,
+      timeoutMs: 40_000,
+      attemptTimeoutMs: 12_000,
+      maxOutputTokens: 4500,
       temperature: 0.7,
-      retries: 2,
+      retries: 1,
     };
     let text = await generateGeminiTurn({
       ...generationOptions,
@@ -198,6 +205,7 @@ app.post('/api/chat', apiLimit, async (req, res) => {
       }),
       userPrompt: buildUserPrompt(history, { final, scenario, plannedStep }),
       timeoutMs: 12_000,
+      attemptTimeoutMs: 4500,
     });
     const turn = normalizeTurn(extractJson(text), { final });
     turn.suggestions = final ? [] : plannedStep.suggestions;
@@ -294,7 +302,7 @@ app.listen(PORT, () => {
   console.log(`BiLingos API on http://localhost:${PORT}`);
   console.log(
     GEMINI_API_KEY
-      ? `Gemini: on (primary ${GEMINI_MODEL}${GEMINI_FALLBACK_MODELS.length ? `; fallback ${GEMINI_FALLBACK_MODELS.join(', ')}` : ''})`
+      ? `Gemini: on (chat ${GEMINI_MODEL}; moments ${GEMINI_MOMENT_MODEL}${GEMINI_FALLBACK_MODELS.length ? `; fallback ${GEMINI_FALLBACK_MODELS.join(', ')}` : ''})`
       : 'Gemini: off. Set GEMINI_API_KEY in .env. The app will use scripted demo replies.',
   );
   console.log(`Feedback file: ${FEEDBACK_FILE}${ADMIN_KEY ? ' (admin view on)' : ''}`);

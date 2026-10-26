@@ -47,7 +47,7 @@ export async function postFeedback(entry) {
   if (!data?.ok) throw new Error('feedback not accepted');
 }
 
-export async function generateMoment(payload, { timeoutMs = 55_000 } = {}) {
+export async function generateMoment(payload, { timeoutMs = 90_000 } = {}) {
   const data = await post('/api/moments', payload, timeoutMs);
   if (!data?.scenario?.id || !data?.scenarioRef) {
     throw new Error('generated moment had the wrong shape');
